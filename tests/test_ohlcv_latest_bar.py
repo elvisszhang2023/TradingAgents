@@ -194,6 +194,11 @@ def test_the_snapshot_does_not_present_a_filled_price_as_reported(monkeypatch, t
         "Volume": [1000000, 1000000, ""],
     })
     today = pd.Timestamp("2026-05-08 12:00")
+    monkeypatch.setattr(
+        snapshot,
+        "get_config",
+        lambda: {"tool_vendors": {"get_stock_data": "yfinance"}},
+    )
     monkeypatch.setattr(ohlcv, "get_config", lambda: {"data_cache_dir": str(tmp_path)})
     monkeypatch.setattr(ohlcv.pd.Timestamp, "today", staticmethod(lambda: today))
     cache = tmp_path / "AAPL-YFin-data.csv"

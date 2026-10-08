@@ -231,6 +231,7 @@ def test_news_neither_yahoo_source_answers_is_a_vendor_outage(monkeypatch):
 
 @pytest.mark.unit
 def test_a_yahoo_news_outage_moves_to_the_next_configured_vendor(monkeypatch):
+    import json
     from unittest.mock import patch
 
     from tradingagents.dataflows import router
@@ -241,7 +242,11 @@ def test_a_yahoo_news_outage_moves_to_the_next_configured_vendor(monkeypatch):
 
     def other_vendor(*a, **k):
         calls.append(a)
-        return "OTHER VENDOR NEWS"
+        return json.dumps({"feed": [{
+            "title": "OTHER VENDOR NEWS",
+            "url": "https://example.test/other-vendor-news",
+            "time_published": "20261002T120000",
+        }]})
 
     saved = dict(get_config()["data_vendors"])
     set_config({"data_vendors": {**saved, "news_data": "yfinance,alpha_vantage"}})
@@ -252,7 +257,10 @@ def test_a_yahoo_news_outage_moves_to_the_next_configured_vendor(monkeypatch):
             out = router.route_to_vendor("get_news", "AAPL", "2026-10-01", "2026-10-02")
     finally:
         set_config({"data_vendors": saved})
-    assert out == "OTHER VENDOR NEWS" and len(calls) == 1
+    merged = json.loads(out)
+    assert merged["articles"][0]["title"] == "OTHER VENDOR NEWS"
+    assert merged["articles"][0]["source_vendor"] == "Alpha Vantage"
+    assert len(calls) == 1
 
 
 @pytest.mark.unit

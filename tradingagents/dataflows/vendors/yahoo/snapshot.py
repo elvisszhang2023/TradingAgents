@@ -11,11 +11,13 @@ claim. Deterministic, no LLM involved.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from io import StringIO
 
 import pandas as pd
 from stockstats import wrap
 
-from tradingagents.dataflows.errors import NoMarketDataError
+from tradingagents.dataflows.config import get_config
+from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableError
 from tradingagents.dataflows.symbols import normalize_symbol
 from tradingagents.dataflows.vendors.yahoo.ohlcv import load_ohlcv
 
@@ -27,6 +29,39 @@ DEFAULT_SNAPSHOT_INDICATORS: tuple[str, ...] = (
 )
 
 
+def _parse_routed_ohlcv(symbol: str, data: str, as_of_date: str) -> pd.DataFrame:
+    if data.startswith("NO_DATA_AVAILABLE"):
+        raise NoMarketDataError(symbol, normalize_symbol(symbol), data)
+    if data.startswith("DATA_UNAVAILABLE"):
+        raise VendorUnavailableError(data)
+
+    frame = pd.read_csv(StringIO(data), comment="#")
+    if frame.empty:
+        raise NoMarketDataError(symbol, normalize_symbol(symbol), "no price rows")
+    if "Date" not in frame.columns:
+        frame = frame.rename(columns={frame.columns[0]: "Date"})
+    columns = {str(column).strip().lower(): column for column in frame.columns}
+    required = ("date", "open", "high", "low", "close", "volume")
+    if any(column not in columns for column in required):
+        raise VendorUnavailableError("Configured price vendor returned invalid OHLCV data.")
+    frame = frame.rename(columns={columns[column]: column.title() for column in required})
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
+    frame = frame.dropna(subset=["Date"])
+    frame = frame[frame["Date"] <= pd.Timestamp(as_of_date)].sort_values("Date")
+    if frame.empty:
+        raise NoMarketDataError(symbol, normalize_symbol(symbol), f"no price rows on or before {as_of_date}")
+    return frame
+
+
+def _load_routed_ohlcv(symbol: str, as_of_date: str) -> pd.DataFrame:
+    from tradingagents.dataflows.router import route_to_vendor
+
+    end_date = pd.Timestamp(as_of_date)
+    start_date = (end_date - pd.DateOffset(years=5)).strftime("%Y-%m-%d")
+    data = route_to_vendor("get_stock_data", symbol, start_date, as_of_date)
+    return _parse_routed_ohlcv(symbol, data, as_of_date)
+
+
 def _verified_rows(symbol: str, as_of_date: str) -> pd.DataFrame:
     """OHLCV on or before as_of_date, date-sorted. Raises NoMarketDataError if nothing usable.
 
@@ -36,7 +71,17 @@ def _verified_rows(symbol: str, as_of_date: str) -> pd.DataFrame:
     """
     # As reported: this snapshot is quoted by the agents as exact prices, so a
     # gap-filled cell would put the previous session's number under this date.
-    data = load_ohlcv(symbol, as_of_date, fill_gaps=False)
+    config = get_config()
+    vendors = config.get("tool_vendors", {}).get("get_stock_data")
+    if vendors is None:
+        vendors = config.get("data_vendors", {}).get("core_stock_apis", "default")
+    vendor_chain = [vendor.strip() for vendor in vendors.split(",") if vendor.strip()]
+
+    if vendor_chain == ["yfinance"]:
+        data = load_ohlcv(symbol, as_of_date, fill_gaps=False)
+    else:
+        data = _load_routed_ohlcv(symbol, as_of_date)
+
     if data is None or data.empty:
         raise NoMarketDataError(symbol, normalize_symbol(symbol), "no price rows")
 

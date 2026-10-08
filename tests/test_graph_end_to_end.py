@@ -8,6 +8,7 @@ the wiring: a restructure that drops a node, a tool or an edge fails here.
 from __future__ import annotations
 
 import copy
+import json
 import time
 
 import pandas as pd
@@ -103,16 +104,50 @@ class _Client:
 def offline(monkeypatch, tmp_path):
     """Every vendor answers offline; returns the set of router methods called."""
     called: set[str] = set()
+
+    def response_for(method, vendor):
+        def respond(*args, **kwargs):
+            called.add(method)
+            if method == "get_stock_data":
+                return (
+                    "Date,Open,High,Low,Close,Volume\n"
+                    f"{args[2]},100,101,99,100.5,1000000\n"
+                )
+            if method == "get_news":
+                ticker, _, end_date = args[:3]
+                article = {
+                    "title": f"{vendor} headline for {ticker}",
+                    "url": f"https://example.test/{vendor}/{ticker}",
+                    "summary": "Offline test article.",
+                }
+                if vendor == "fmp":
+                    article["publishedDate"] = f"{end_date} 12:00:00"
+                    article["text"] = article.pop("summary")
+                    return json.dumps([article])
+                if vendor == "alpha_vantage":
+                    article["time_published"] = end_date.replace("-", "") + "T120000"
+                    article["source"] = "Offline"
+                    return json.dumps({"feed": [article]})
+                return (
+                    f"## {ticker} News\n\n"
+                    f"### {article['title']} (source: Offline)\n"
+                    f"{article['summary']}\nLink: {article['url']}\n"
+                )
+            return f"{method} data"
+        return respond
+
     for method, vendors in router.VENDOR_METHODS.items():
         for vendor in vendors:
-            monkeypatch.setitem(vendors, vendor,
-                                lambda *a, _m=method, **k: called.add(_m) or f"{_m} data")
+            monkeypatch.setitem(vendors, vendor, response_for(method, vendor))
     prices = pd.DataFrame({
         "Date": pd.bdate_range(end=TRADE_DATE, periods=60),
         "Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.5, "Volume": 1_000_000,
     })
-    monkeypatch.setattr(snapshot, "load_ohlcv",
-                        lambda *a, **k: called.add("ohlcv") or prices.copy())
+    monkeypatch.setattr(
+        snapshot,
+        "_load_routed_ohlcv",
+        lambda *a, **k: called.add("ohlcv") or prices.copy(),
+    )
     monkeypatch.setattr(sentiment_analyst, "fetch_stocktwits_messages", lambda *a, **k: "no posts")
     monkeypatch.setattr(sentiment_analyst, "fetch_reddit_posts", lambda *a, **k: "no posts")
     monkeypatch.setattr(yahoo_market.yf, "Ticker", lambda s: type("T", (), {"info": {"longName": "NVIDIA"}})())
@@ -225,6 +260,11 @@ def test_a_streamed_run_reads_its_own_graph_config(tmp_path, monkeypatch, offlin
     graph = _graph(tmp_path, monkeypatch, ScriptedModel(), output_language="French")
     set_config({"output_language": "German"})
     seen = []
+    def unavailable(*args, **kwargs):
+        raise router.VendorUnavailableError("offline test fallback")
+
+    monkeypatch.setitem(router.VENDOR_METHODS["get_stock_data"], "fmp", unavailable)
+    monkeypatch.setitem(router.VENDOR_METHODS["get_stock_data"], "alpha_vantage", unavailable)
     monkeypatch.setitem(router.VENDOR_METHODS["get_stock_data"], "yfinance",
                         lambda *a, **k: seen.append(get_config()["output_language"]) or "prices")
 

@@ -6,9 +6,11 @@ Regressions for #988 (explicit single-vendor config still fell back to others),
 were swallowed without a trace).
 """
 import copy
+from io import StringIO
 import unittest
 from unittest import mock
 
+import pandas as pd
 import pytest
 
 import tradingagents.dataflows.config as config_module
@@ -40,6 +42,10 @@ def _raises(exc):
     return impl
 
 
+def _prices(rows):
+    return "Date,Open,High,Low,Close,Volume\n" + "\n".join(rows) + "\n"
+
+
 @pytest.mark.unit
 class VendorRoutingTests(unittest.TestCase):
     def setUp(self):
@@ -64,12 +70,55 @@ class VendorRoutingTests(unittest.TestCase):
         self.assertIn("NO_DATA_AVAILABLE", result)
         av.assert_not_called()  # the unchosen vendor was never tried
 
-    def test_explicit_multi_vendor_falls_back_within_chain(self):
-        # Listing both vendors opts in to ordered fallback.
+    def test_multi_vendor_chain_includes_usable_sources(self):
         set_config({"data_vendors": {"core_stock_apis": "yfinance,alpha_vantage"}})
-        with self._route({"yfinance": _no_data, "alpha_vantage": _returns("AV_DATA")}):
+        with self._route({"yfinance": _no_data, "alpha_vantage": _returns(_prices([
+            "2026-01-05,10,11,9,10.5,100",
+        ]))}):
             result = router.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
-        self.assertEqual(result, "AV_DATA")
+        self.assertIn("2026-01-05", result)
+
+    def test_fmp_is_available_as_a_price_fallback(self):
+        set_config({"data_vendors": {"core_stock_apis": "yfinance,fmp"}})
+        with self._route({"yfinance": _no_data, "fmp": _returns(_prices([
+            "2026-01-05,10,11,9,10.5,100",
+        ]))}):
+            result = router.route_to_vendor("get_stock_data", "TSLA", "2026-01-01", "2026-01-10")
+        self.assertIn("2026-01-05", result)
+
+    def test_price_data_uses_first_valid_source_without_calling_later_sources(self):
+        set_config({"data_vendors": {"core_stock_apis": "fmp,alpha_vantage,yfinance"}})
+        alpha = mock.Mock(return_value=_prices(["2026-01-06,20,21,19,20.5,200"]))
+        yahoo = mock.Mock(return_value=_prices(["2026-01-07,30,31,29,30.5,300"]))
+        fmp = mock.Mock(return_value=_prices(["2026-01-05,10,11,9,10.5,100"]))
+        vendors = {
+            "fmp": fmp,
+            "alpha_vantage": alpha,
+            "yfinance": yahoo,
+        }
+        with self._route(vendors):
+            result = router.route_to_vendor("get_stock_data", "TSLA", "2026-01-01", "2026-01-10")
+
+        frame = pd.read_csv(StringIO(result), comment="#")
+        fmp.assert_called_once()
+        alpha.assert_not_called()
+        yahoo.assert_not_called()
+        self.assertEqual(frame["Date"].tolist(), ["2026-01-05"])
+        self.assertEqual(frame["Close"].tolist(), [10.5])
+
+    def test_price_data_falls_back_when_primary_response_is_invalid(self):
+        set_config({"data_vendors": {"core_stock_apis": "fmp,alpha_vantage,yfinance"}})
+        fmp = mock.Mock(return_value="date,open,high,low,close\n2026-01-05,10,11,9,10.5\n")
+        alpha = mock.Mock(return_value=_prices(["2026-01-06,20,21,19,20.5,200"]))
+        yahoo = mock.Mock(return_value=_prices(["2026-01-07,30,31,29,30.5,300"]))
+        with self._route({"fmp": fmp, "alpha_vantage": alpha, "yfinance": yahoo}):
+            result = router.route_to_vendor("get_stock_data", "TSLA", "2026-01-01", "2026-01-10")
+
+        frame = pd.read_csv(StringIO(result), comment="#")
+        fmp.assert_called_once()
+        alpha.assert_called_once()
+        yahoo.assert_not_called()
+        self.assertEqual(frame["Date"].tolist(), ["2026-01-06"])
 
     def test_primary_error_is_logged_not_masked(self):
         # #989: a broken primary is not hidden behind a fallback's verdict. It
@@ -93,9 +142,11 @@ class VendorRoutingTests(unittest.TestCase):
     def test_default_sentinel_uses_all_vendors(self):
         # No explicit choice ("default") keeps the resilient full-chain behavior.
         set_config({"data_vendors": {"core_stock_apis": "default"}})
-        with self._route({"yfinance": _no_data, "alpha_vantage": _returns("AV_DATA")}):
+        with self._route({"yfinance": _no_data, "alpha_vantage": _returns(_prices([
+            "2026-01-05,10,11,9,10.5,100",
+        ]))}):
             result = router.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
-        self.assertEqual(result, "AV_DATA")
+        self.assertIn("2026-01-05", result)
 
     def _route_method(self, method, vendors):
         return mock.patch.dict(router.VENDOR_METHODS, {method: vendors}, clear=False)

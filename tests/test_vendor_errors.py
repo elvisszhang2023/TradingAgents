@@ -24,6 +24,8 @@ from tradingagents.dataflows.vendors.alpha_vantage.common import (
 )
 from tradingagents.dataflows.vendors.fred import FredNotConfiguredError
 
+PRICE_CSV = "Date,Open,High,Low,Close,Volume\n2026-01-05,10,11,9,10.5,100\n"
+
 
 @pytest.mark.unit
 class HierarchyTests(unittest.TestCase):
@@ -60,11 +62,11 @@ class RouterHandlesBaseTypesTests(unittest.TestCase):
 
         with mock.patch.dict(
             router.VENDOR_METHODS,
-            {"get_stock_data": {"alpha_vantage": _throttled, "yfinance": lambda *a, **k: "YF"}},
+            {"get_stock_data": {"alpha_vantage": _throttled, "yfinance": lambda *a, **k: PRICE_CSV}},
             clear=False,
         ):
             out = router.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
-        self.assertEqual(out, "YF")
+        self.assertIn("2026-01-05", out)
 
     def test_not_configured_falls_through_to_next_vendor(self):
         set_config({"data_vendors": {"core_stock_apis": "alpha_vantage,yfinance"}})
@@ -74,11 +76,11 @@ class RouterHandlesBaseTypesTests(unittest.TestCase):
 
         with mock.patch.dict(
             router.VENDOR_METHODS,
-            {"get_stock_data": {"alpha_vantage": _unconfigured, "yfinance": lambda *a, **k: "YF"}},
+            {"get_stock_data": {"alpha_vantage": _unconfigured, "yfinance": lambda *a, **k: PRICE_CSV}},
             clear=False,
         ):
             out = router.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
-        self.assertEqual(out, "YF")
+        self.assertIn("2026-01-05", out)
 
     def test_sole_unconfigured_vendor_surfaces_the_error(self):
         # With no fallback, the not-configured condition must surface (not vanish).

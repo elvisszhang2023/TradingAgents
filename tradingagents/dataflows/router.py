@@ -1,5 +1,11 @@
 import logging
+from datetime import datetime, timedelta
 
+from tradingagents.dataflows.aggregation import (
+    _news_payload,
+    merge_news_results,
+    parse_ohlcv_result,
+)
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.errors import (
     NoMarketDataError,
@@ -16,6 +22,14 @@ from tradingagents.dataflows.vendors.alpha_vantage import (
     get_insider_transactions as get_alpha_vantage_insider_transactions,
     get_news as get_alpha_vantage_news,
     get_stock as get_alpha_vantage_stock,
+)
+from tradingagents.dataflows.vendors.finnhub import (
+    get_global_news as get_finnhub_global_news,
+    get_news as get_finnhub_news,
+)
+from tradingagents.dataflows.vendors.fmp import (
+    get_news as get_fmp_news,
+    get_stock as get_fmp_stock,
 )
 from tradingagents.dataflows.vendors.fred import get_macro_data as get_fred_macro_data
 from tradingagents.dataflows.vendors.polymarket import (
@@ -99,6 +113,7 @@ VENDOR_METHODS = {
     "get_stock_data": {
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
+        "fmp": get_fmp_stock,
     },
     # technical_indicators
     "get_indicators": {
@@ -129,10 +144,13 @@ VENDOR_METHODS = {
     "get_news": {
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
+        "fmp": get_fmp_news,
+        "finnhub": get_finnhub_news,
     },
     "get_global_news": {
         "yfinance": get_global_news_yfinance,
         "alpha_vantage": get_alpha_vantage_global_news,
+        "finnhub": get_finnhub_global_news,
     },
     "get_insider_transactions": {
         "alpha_vantage": get_alpha_vantage_insider_transactions,
@@ -201,7 +219,7 @@ def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
     category = get_category_for_method(method)
     vendor_config = get_vendor(category, method)
-    primary_vendors = [v.strip() for v in vendor_config.split(',')]
+    primary_vendors = list(dict.fromkeys(v.strip() for v in vendor_config.split(',')))
 
     if method not in VENDOR_METHODS:
         raise ValueError(f"Method '{method}' not supported")
@@ -210,12 +228,12 @@ def route_to_vendor(method: str, *args, **kwargs):
 
     # The configured vendor list IS the chain: we do NOT silently fall back to
     # vendors the user did not choose (#988/#289) — that returned data from an
-    # unexpected source and caused cross-vendor inconsistencies. For multi-vendor
-    # fallback, list them in order, e.g. data_vendors="yfinance,alpha_vantage".
+    # unexpected source and caused cross-vendor inconsistencies. OHLCV uses the
+    # configured order for fallback; ticker news merges configured sources.
     # The "default" sentinel (no explicit config) uses all available vendors.
     explicit = [v for v in primary_vendors if v and v != "default"]
     if explicit:
-        vendor_chain = [v for v in explicit if v in VENDOR_METHODS[method]]
+        vendor_chain = list(dict.fromkeys(v for v in explicit if v in VENDOR_METHODS[method]))
         if not vendor_chain:
             raise ValueError(
                 f"Configured vendor(s) {explicit} not available for '{method}'. "
@@ -228,12 +246,35 @@ def route_to_vendor(method: str, *args, **kwargs):
     last_unavailable: VendorUnavailableError | None = None
     failed: Exception | None = None     # a vendor that raised something untyped
     first_error: Exception | None = None
+    news_results = []
+    aggregate_news = method in {"get_news", "get_global_news"} and len(vendor_chain) > 1
+    validate_prices_for_fallback = method == "get_stock_data" and len(vendor_chain) > 1
     for vendor in vendor_chain:
         vendor_impl = VENDOR_METHODS[method][vendor]
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
 
         try:
-            return impl_func(*args, **kwargs)
+            result = impl_func(*args, **kwargs)
+            if validate_prices_for_fallback:
+                parse_ohlcv_result(vendor, result, *args[:3])
+            if aggregate_news:
+                if method == "get_news":
+                    start_date, end_date = args[1:3]
+                else:
+                    as_of_date, look_back_days = args[:2]
+                    if look_back_days is None:
+                        look_back_days = get_config()["global_news_lookback_days"]
+                    start_date = (
+                        datetime.strptime(as_of_date, "%Y-%m-%d")
+                        - timedelta(days=look_back_days)
+                    ).strftime("%Y-%m-%d")
+                    end_date = as_of_date
+                articles, metadata, message = _news_payload(
+                    vendor, result, start_date, end_date
+                )
+                news_results.append((vendor, articles, metadata, message))
+                continue
+            return result
         except VendorUnavailableError as e:
             logger.warning("Vendor %r unavailable for %s: %s; trying next vendor.", vendor, method, e)
             # Kept so an all-unavailable chain can say the vendor was the
@@ -257,6 +298,9 @@ def route_to_vendor(method: str, *args, **kwargs):
                 first_error = e
             failed = e
             continue
+
+    if news_results:
+        return merge_news_results(news_results)
 
     # A vendor that throttled or failed the request never said whether it has
     # the symbol, so no other vendor's "no data" can speak for the whole chain:
