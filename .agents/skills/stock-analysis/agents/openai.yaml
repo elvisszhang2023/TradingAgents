@@ -1,0 +1,6 @@
+interface:
+  display_name: "股票研究"
+  short_description: "结合最新行情、财报与估值分析上市股票"
+  default_prompt: "使用 $stock-analysis 按最新数据分析这只股票，并给出分批买入判断。"
+policy:
+  allow_implicit_invocation: true

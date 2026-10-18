@@ -213,6 +213,13 @@ tradingagents --ticker NVDA --date 2026-09-23 --analysts market,news,fundamental
 ```
 Each flag skips only its own question. Run without a terminal, a missing answer stops the run before it starts and names the flag or variable to set.
 
+For a reusable `uv` wrapper, run:
+```bash
+scripts/analyze_stock.sh TSLA
+scripts/analyze_stock.sh 0700.HK 2026-10-16
+```
+The date defaults to today, and the wrapper selects market, news, fundamentals, and sentiment analysts, then saves the report without opening it. It uses the repository's `.env`; set the provider, models, research depth, and output language there for a fully unattended run.
+
 A saved report also includes `complete_report.html`, the report as one page with its sections listed beside the text, for reading in a browser, on a phone or in print. Answering the save question at the prompt also asks about the page and can open it in your browser; `--no-html` skips it, and so does `ta.save_reports(state, "NVDA", html=False)` from Python.
 
 ### Markets and tickers

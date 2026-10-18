@@ -15,58 +15,109 @@ description: 当用户提到股票、上市公司名称或股票代码时触发�
 
 ## 使用方式
 
-触发此技能后，从仓库根目录调用封装脚本：
+触发此技能后，先确认本机 HTTP 服务可用，再调用分析 API。服务由用户独立启动，默认地址为 `http://127.0.0.1:8765`。
+
+健康检查：
 
 ```bash
-scripts/analyze_stock.sh TICKER [DATE] [ANALYSTS]
+curl --noproxy '*' --fail --max-time 5 http://127.0.0.1:8765/health
 ```
 
-由于脚本执行时间较长，应以后台任务方式运行，并保存标准输出和错误输出。启动后持续等待或轮询任务状态，直到脚本完成，再根据最终结果回复用户；不要在任务尚未完成时擅自结束并替换为其他分析方式。
+调用分析接口：
 
-运行可能调用计费的大模型与数据 API。参数含义：
+```bash
+curl --noproxy '*' --silent --show-error --max-time 1800 \
+  --write-out '\nHTTP_STATUS:%{http_code}\n' \
+  -X POST http://127.0.0.1:8765/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{"ticker":"TSLA"}'
+```
 
-- `TICKER`（必填）：股票代码；按 Yahoo Finance 使用对应交易所后缀，例如美股 `TSLA`、港股 `0700.HK`、日股 `7203.T`。
-- `DATE`（可选）：分析基准日期，格式为 `YYYY-MM-DD`；省略时默认为运行当天。
-- `ANALYSTS`（可选）：逗号分隔的分析师列表，可选 `market`（技术/行情）、`news`（新闻）、`fundamentals`（基本面）、`sentiment`（社交情绪）；省略时运行四类分析师。
+请求 JSON 必须通过接口传入分析参数：
+
+```json
+{
+  "ticker": "TSLA",
+  "date": "2026-10-18",
+  "analysts": "market,news,fundamentals,sentiment"
+}
+```
+
+其中 `ticker` 必填，`date` 和 `analysts` 可省略并使用服务默认值。不要直接调用仓库中的分析脚本。
+
+由于分析执行时间较长，应等待 API 返回最终结果；不要在任务尚未完成时擅自结束并替换为其他分析方式。
+
+### HTTP 状态码处理
+
+必须同时检查 HTTP 状态码、JSON 响应体和报告文件，不得只依据 `curl` 的退出状态。
+
+- `200 OK`：仅当 `success` 为 `true` 且 `complete_report` 存在时视为成功。
+- `400 Bad Request`：参数错误；返回响应中的错误并停止。
+- `401` / `403`：认证或权限错误；返回原始错误并停止。
+- `408` / `504`：服务超时；返回超时状态并停止。
+- `409 Conflict`：已有分析任务运行；返回原始错误并停止。
+- `500 Internal Server Error`：分析脚本或服务失败；返回 HTTP 状态、退出码、标准输出和标准错误并停止。
+- `503 Service Unavailable`：服务未启动；返回服务不可用信息并停止。
+- 其他所有非 `2xx` 状态码：均视为失败并停止。
+
+无法连接服务、请求超时、响应不是合法 JSON、`success` 为 `false`、缺少 `complete_report` 或报告文件不存在，也必须视为失败。失败后不得绕过 API 使用其他数据源或生成投资建议。
+
+运行可能调用计费的大模型与数据 API。请求参数含义：
+
+- `ticker`（必填）：股票代码；按 Yahoo Finance 使用对应交易所后缀，例如美股 `TSLA`、港股 `0700.HK`、日股 `7203.T`。
+- `date`（可选）：分析基准日期，格式为 `YYYY-MM-DD`；省略时默认为运行当天。
+- `analysts`（可选）：逗号分隔的分析师列表，可选 `market`（技术/行情）、`news`（新闻）、`fundamentals`（基本面）、`sentiment`（社交情绪）；省略时运行四类分析师。
 
 常见示例：
 
 ```bash
 # 默认配置：四类分析师，分析当天行情
-scripts/analyze_stock.sh TSLA
+curl --noproxy '*' --silent --show-error --max-time 1800 \
+  -X POST http://127.0.0.1:8765/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{"ticker":"TSLA"}'
 
 # 指定港股代码和分析日期，使用默认四类分析师
-scripts/analyze_stock.sh 0700.HK 2026-10-16
+curl --noproxy '*' --silent --show-error --max-time 1800 \
+  -X POST http://127.0.0.1:8765/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{"ticker":"0700.HK","date":"2026-10-16"}'
 
 # 只运行行情和新闻分析
-scripts/analyze_stock.sh AAPL 2026-10-16 market,news
+curl --noproxy '*' --silent --show-error --max-time 1800 \
+  -X POST http://127.0.0.1:8765/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{"ticker":"AAPL","date":"2026-10-16","analysts":"market,news"}'
 
 # 运行基本面、新闻和社交情绪分析
-scripts/analyze_stock.sh NBIS 2026-10-16 fundamentals,news,sentiment
-
-# 查看脚本帮助
-scripts/analyze_stock.sh --help
+curl --noproxy '*' --silent --show-error --max-time 1800 \
+  -X POST http://127.0.0.1:8765/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{"ticker":"NBIS","date":"2026-10-16","analysts":"fundamentals,news,sentiment"}'
 ```
 
-脚本会保存报告且不自动打开报告。将生成报告视为一项分析输入；其中的现价、日期和重大事实仍需用最新来源核验。
+服务会保存报告且不自动打开报告。将生成报告视为一项分析输入；其中的现价、日期和重大事实仍需用最新来源核验。
 
 ## 结果分析
 
-脚本执行完成后，回复必须包含以下两点：
+API 调用完成后，回复必须包含以下两点：
 
-1. 报告路径：准确提取脚本输出中的 `✓ Report saved to:` 路径，并注明完整报告文件为 `complete_report.md`，HTML 报告为 `complete_report.html`（如果脚本输出了这两项）。
+1. 报告路径：准确提取 API 响应中的 `report_dir`，并注明完整报告文件为 `complete_report.md`，HTML 报告为 `complete_report.html`（如果响应中提供了该路径）。
 2. 投资建议：结合报告内容给出直接但有条件的判断，例如买入、分批买入、持有、等待观察或回避；说明判断依据、主要风险和触发条件，不承诺收益。
 
-脚本输出通常包含股票代码、分析日期、分析师列表和报告路径，例如：
+API 响应通常包含股票代码、分析日期、分析师列表和报告路径，例如：
 
-```text
-✓ Report saved to: /path/to/reports/TSLA_20261018_183038
-  Complete report: complete_report.md
-  HTML report: complete_report.html
+```json
+{
+  "success": true,
+  "report_dir": "/path/to/reports/TSLA_20261018_183038",
+  "complete_report": "/path/to/reports/TSLA_20261018_183038/complete_report.md",
+  "complete_report_html": "/path/to/reports/TSLA_20261018_183038/complete_report.html"
+}
 ```
 
 投资建议应区分已核实事实与推断；如需引用现价、日期或重大事实，应标明时间和来源。应优先给出带时间戳的价格，再简述业务与财务、估值、催化剂/风险及适合用户偏好的分批或等待条件。
 
 ### 异常处理
 
-如果脚本执行失败，直接返回脚本的失败结果信息，包括退出状态以及可获得的标准输出和错误信息；不要擅自进行股票分析、联网搜索、重试脚本或切换其他分析流程。失败时不得给出基于外部信息的投资建议，也不得声称报告已生成；如果输出中出现部分结果，应明确标注为不完整或失败结果。
+如果 API 调用失败，直接返回 API 的失败结果信息，包括 HTTP 状态、退出状态以及可获得的标准输出和错误信息；不要擅自进行股票分析、联网搜索、重试 API 或切换其他分析流程。失败时不得给出基于外部信息的投资建议，也不得声称报告已生成；如果响应中出现部分结果，应明确标注为不完整或失败结果。
