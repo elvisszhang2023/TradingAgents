@@ -39,6 +39,9 @@ dev = [
 bedrock = [
     "langchain-aws>=1.7.9",
 ]
+futu = [
+    "futu-api>=10.11.7108",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"

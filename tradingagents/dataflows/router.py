@@ -1,6 +1,8 @@
 import logging
 from datetime import datetime, timedelta
 
+from tradingagents.dataflows.artifacts import DataArtifactCollector
+
 from tradingagents.dataflows.aggregation import (
     _news_payload,
     merge_news_results,
@@ -32,6 +34,12 @@ from tradingagents.dataflows.vendors.fmp import (
     get_stock as get_fmp_stock,
 )
 from tradingagents.dataflows.vendors.fred import get_macro_data as get_fred_macro_data
+from tradingagents.dataflows.vendors.futu import (
+    get_capital_distribution as get_futu_capital_distribution,
+    get_capital_flow as get_futu_capital_flow,
+    get_history_kline as get_futu_history_kline,
+    get_market_snapshot as get_futu_market_snapshot,
+)
 from tradingagents.dataflows.vendors.polymarket import (
     get_prediction_markets as get_polymarket_prediction_markets,
 )
@@ -97,7 +105,16 @@ TOOLS_CATEGORIES = {
         "tools": [
             "get_prediction_markets",
         ]
-    }
+    },
+    "capital_flow_data": {
+        "description": "Optional Futu capital-flow and market-trend enrichment",
+        "tools": [
+            "get_futu_capital_flow",
+            "get_futu_capital_distribution",
+            "get_futu_market_snapshot",
+            "get_futu_history_kline",
+        ],
+    },
 }
 
 # Optional enrichment categories. These add macro/event context to the news
@@ -105,7 +122,7 @@ TOOLS_CATEGORIES = {
 # sentinel instead of aborting the run (a bad LLM-supplied indicator, a missing
 # key, or a network blip should not crash an analysis over flavour data). Core
 # categories (prices, fundamentals, news) still raise so a broken primary is loud.
-OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets"}
+OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets", "capital_flow_data"}
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
@@ -163,6 +180,19 @@ VENDOR_METHODS = {
     # prediction_markets
     "get_prediction_markets": {
         "polymarket": get_polymarket_prediction_markets,
+    },
+    # Optional Futu enrichment; separate from core_stock_apis by design.
+    "get_futu_capital_flow": {
+        "futu": get_futu_capital_flow,
+    },
+    "get_futu_capital_distribution": {
+        "futu": get_futu_capital_distribution,
+    },
+    "get_futu_market_snapshot": {
+        "futu": get_futu_market_snapshot,
+    },
+    "get_futu_history_kline": {
+        "futu": get_futu_history_kline,
     },
 }
 
@@ -249,14 +279,22 @@ def route_to_vendor(method: str, *args, **kwargs):
     news_results = []
     aggregate_news = method in {"get_news", "get_global_news"} and len(vendor_chain) > 1
     validate_prices_for_fallback = method == "get_stock_data" and len(vendor_chain) > 1
+    collector = get_config().get("_data_artifact_collector")
+    if collector is not None and not isinstance(collector, DataArtifactCollector):
+        collector = None
     for vendor in vendor_chain:
         vendor_impl = VENDOR_METHODS[method][vendor]
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
 
+        started_at = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        started_clock = DataArtifactCollector.timer()
+        result = None
+        recorded = False
         try:
             result = impl_func(*args, **kwargs)
+            normalized = None
             if validate_prices_for_fallback:
-                parse_ohlcv_result(vendor, result, *args[:3])
+                normalized = parse_ohlcv_result(vendor, result, *args[:3])
             if aggregate_news:
                 if method == "get_news":
                     start_date, end_date = args[1:3]
@@ -272,24 +310,70 @@ def route_to_vendor(method: str, *args, **kwargs):
                 articles, metadata, message = _news_payload(
                     vendor, result, start_date, end_date
                 )
+                if collector is not None:
+                    collector.record(
+                        method=method,
+                        vendor=vendor,
+                        args=args,
+                        kwargs=kwargs,
+                        started_at=started_at,
+                        started_clock=started_clock,
+                        status="success",
+                        result=result,
+                        normalized={
+                            "articles": articles,
+                            "metadata": metadata,
+                            "message": message,
+                        },
+                    )
+                    recorded = True
                 news_results.append((vendor, articles, metadata, message))
                 continue
+            if collector is not None:
+                collector.record(
+                    method=method,
+                    vendor=vendor,
+                    args=args,
+                    kwargs=kwargs,
+                    started_at=started_at,
+                    started_clock=started_clock,
+                    status="success",
+                    result=result,
+                    normalized=normalized,
+                )
+                recorded = True
             return result
         except VendorUnavailableError as e:
+            if collector is not None and not recorded:
+                collector.record(method=method, vendor=vendor, args=args, kwargs=kwargs,
+                                 started_at=started_at, started_clock=started_clock,
+                                 status="unavailable", result=result, error=e)
             logger.warning("Vendor %r unavailable for %s: %s; trying next vendor.", vendor, method, e)
             # Kept so an all-unavailable chain can say the vendor was the
             # problem, rather than reporting nothing about the symbol.
             last_unavailable = e
             continue
         except VendorNotConfiguredError as e:
+            if collector is not None and not recorded:
+                collector.record(method=method, vendor=vendor, args=args, kwargs=kwargs,
+                                 started_at=started_at, started_clock=started_clock,
+                                 status="not_configured", result=result, error=e)
             logger.warning("Vendor %r not configured for %s; trying next vendor.", vendor, method)
             if first_error is None:
                 first_error = e  # Surface it if no other vendor can serve the call.
             continue
         except NoMarketDataError as e:
+            if collector is not None and not recorded:
+                collector.record(method=method, vendor=vendor, args=args, kwargs=kwargs,
+                                 started_at=started_at, started_clock=started_clock,
+                                 status="no_data", result=result, error=e)
             last_no_data = e  # No data here; another configured vendor may have it
             continue
         except Exception as e:
+            if collector is not None and not recorded:
+                collector.record(method=method, vendor=vendor, args=args, kwargs=kwargs,
+                                 started_at=started_at, started_clock=started_clock,
+                                 status="error", result=result, error=e)
             # Don't let one vendor's failure crash the call when another can
             # serve it, but never swallow silently: a broken primary must be
             # visible in the logs (#989), not hidden behind a fallback's verdict.

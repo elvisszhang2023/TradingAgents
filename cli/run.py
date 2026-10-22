@@ -26,6 +26,7 @@ from cli.selections import depth_from_env, get_user_selections, unattended_gaps
 from cli.stats_handler import StatsCallbackHandler
 from tradingagents.agents.rating import is_review, run_rating
 from tradingagents.dataflows.symbols import safe_ticker_component
+from tradingagents.dataflows.artifacts import DataArtifactCollector
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.analyst_execution import (
     build_analyst_execution_plan,
@@ -110,6 +111,11 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
     selections = get_user_selections(flags)
 
     config = _build_run_config(selections, checkpoint)
+
+    if config.get("include_raw_data", True):
+        config["_data_artifact_collector"] = DataArtifactCollector(
+            selections["ticker"], selections["analysis_date"]
+        )
 
     stats_handler = StatsCallbackHandler()
 

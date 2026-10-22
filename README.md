@@ -222,6 +222,14 @@ The date defaults to today, and the wrapper selects market, news, fundamentals, 
 
 A saved report also includes `complete_report.html`, the report as one page with its sections listed beside the text, for reading in a browser, on a phone or in print. Answering the save question at the prompt also asks about the page and can open it in your browser; `--no-html` skips it, and so does `ta.save_reports(state, "NVDA", html=False)` from Python.
 
+By default, unattended CLI and HTTP runs also preserve model-independent data
+artifacts beside the report: `data/raw/` contains each routed vendor response
+and fallback error, `data/normalized/` contains machine-friendly CSV/JSON where
+possible, and `data/manifest.json` records the source, API, parameters, status,
+latency, timestamps, checksum, and artifact paths. Credentials are redacted.
+Set `TRADINGAGENTS_INCLUDE_RAW_DATA=false`, or send
+`"include_raw_data": false` to the HTTP `/analyze` endpoint, to disable this.
+
 ### Markets and tickers
 
 TradingAgents works with any market Yahoo Finance covers, using the exchange-suffixed ticker. Company identity and the alpha benchmark resolve automatically per market.

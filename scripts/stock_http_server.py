@@ -47,6 +47,10 @@ class AnalysisService:
         if not names or any(name not in ALLOWED_ANALYSTS for name in names):
             return self._error(HTTPStatus.BAD_REQUEST, "analysts contains an unsupported analyst")
 
+        include_raw_data = payload.get("include_raw_data", True)
+        if not isinstance(include_raw_data, bool):
+            return self._error(HTTPStatus.BAD_REQUEST, "include_raw_data must be a boolean")
+
         # Keep the HTTP worker available while waiting, but serialize the
         # expensive analysis subprocesses instead of rejecting concurrent
         # requests with HTTP 409.
@@ -61,6 +65,7 @@ class AnalysisService:
             ]
             environment = os.environ.copy()
             environment["TRADINGAGENTS_RESULTS_DIR"] = str(PROJECT_ROOT)
+            environment["TRADINGAGENTS_INCLUDE_RAW_DATA"] = str(include_raw_data).lower()
             try:
                 completed = subprocess.run(
                     command,
@@ -114,6 +119,15 @@ class AnalysisService:
             result["complete_report"] = str(markdown)
         if html.is_file():
             result["complete_report_html"] = str(html)
+        manifest = report_dir / "data" / "manifest.json"
+        raw_data = report_dir / "data" / "raw"
+        normalized_data = report_dir / "data" / "normalized"
+        if manifest.is_file():
+            result["data_manifest"] = str(manifest)
+        if raw_data.is_dir():
+            result["raw_data_dir"] = str(raw_data)
+        if normalized_data.is_dir():
+            result["normalized_data_dir"] = str(normalized_data)
         return result
 
     @staticmethod

@@ -26,6 +26,12 @@ def test_no_env_uses_built_in_defaults(monkeypatch):
     assert config["backend_url"] is None
     assert config["max_debate_rounds"] == 1
     assert config["checkpoint_enabled"] is False
+    assert config["include_raw_data"] is True
+
+
+def test_raw_data_capture_can_be_disabled(monkeypatch):
+    config = _config_with_env(monkeypatch, TRADINGAGENTS_INCLUDE_RAW_DATA="false")
+    assert config["include_raw_data"] is False
 
 
 def test_string_overrides(monkeypatch):

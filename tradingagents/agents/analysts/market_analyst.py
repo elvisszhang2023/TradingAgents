@@ -2,11 +2,23 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.analysts.turn import take_turn
 from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
-from tradingagents.agents.tools import get_indicators, get_stock_data, get_verified_market_snapshot
+from tradingagents.agents.tools import (
+    get_futu_capital_distribution,
+    get_futu_capital_flow,
+    get_futu_history_kline,
+    get_futu_market_snapshot,
+    get_indicators,
+    get_stock_data,
+    get_verified_market_snapshot,
+)
 
 # The tools this analyst is offered; its tool node is built from the same tuple.
 TOOLS = (
     get_stock_data,
+    get_futu_capital_flow,
+    get_futu_capital_distribution,
+    get_futu_market_snapshot,
+    get_futu_history_kline,
     get_indicators,
     get_verified_market_snapshot,
 )
@@ -43,7 +55,9 @@ Volatility Indicators:
 Volume-Based Indicators:
 - vwma: VWMA: A moving average weighted by volume. Usage: Confirm trends by integrating price action with volume data. Tips: Watch for skewed results from volume spikes; use in combination with other volume analyses.
 
-- Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. When you tool call, please use the exact name of the indicators provided above as they are defined parameters, otherwise your call will fail. Please make sure to call get_stock_data first to retrieve the CSV that is needed to generate indicators. Then use get_indicators with the specific indicator names.
+- Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. When you tool call, please use the exact name of the indicators provided above as they are defined parameters, otherwise your call will fail.
+
+In the first tool round, call get_stock_data together with all four optional Futu tools (get_futu_capital_flow, get_futu_capital_distribution, get_futu_market_snapshot, and get_futu_history_kline) so the primary and supplementary sources execute in parallel. Futu is enrichment only: if it reports DATA_UNAVAILABLE, FUTU_LIVE_DATA_WITHHELD, or no coverage, continue with the original sources and state that the enrichment was unavailable. Never treat Futu order-size flow as a named institution's confirmed trade. Then use get_indicators with the specific indicator names.
 
 Before writing the final report, call get_verified_market_snapshot for this ticker and the current date, and treat it as the source of truth for any exact OHLCV, price-level, or indicator-value claim. If another tool's output conflicts with the verified snapshot, flag the discrepancy rather than inventing a reconciled number. Do not claim historical validation, support/resistance bounces, or exact percentage moves unless they are directly supported by tool output with concrete dates and prices.
 

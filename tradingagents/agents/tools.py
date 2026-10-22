@@ -4,12 +4,13 @@ Each dated tool takes the run's ``trade_date`` from graph state (``InjectedState
 and never serves data past it, whatever date the model asks for.
 """
 
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from tradingagents.dataflows.date_window import as_of, as_of_window
+from tradingagents.dataflows.date_window import as_of, as_of_window, get_current_date
 from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableError
 from tradingagents.dataflows.router import no_data_available, route_to_vendor, vendor_unavailable
 from tradingagents.dataflows.vendors.yahoo.snapshot import build_verified_market_snapshot
@@ -92,6 +93,62 @@ def get_verified_market_snapshot(
         return vendor_unavailable("get_verified_market_snapshot", exc)
     except NoMarketDataError as exc:
         return no_data_available(exc)
+
+
+def _futu_window(trade_date: str, look_back_days: int) -> tuple[str, str]:
+    if not 1 <= look_back_days <= 3650:
+        raise ValueError("look_back_days must be between 1 and 3650")
+    end = trade_date or get_current_date()
+    start = datetime.strptime(end, "%Y-%m-%d") - timedelta(days=look_back_days)
+    return start.strftime("%Y-%m-%d"), end
+
+
+@tool
+def get_futu_capital_flow(
+    symbol: Annotated[str, InjectedState("company_of_interest")],
+    look_back_days: Annotated[int, "calendar-day lookback for daily capital-flow trend"] = 30,
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """Optional Futu daily capital-flow trend; supplements existing market data."""
+    try:
+        start_date, end_date = _futu_window(trade_date, look_back_days)
+    except ValueError as exc:
+        return str(exc)
+    return route_to_vendor("get_futu_capital_flow", symbol, start_date, end_date)
+
+
+@tool
+def get_futu_capital_distribution(
+    symbol: Annotated[str, InjectedState("company_of_interest")],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """Optional Futu live order-size inflow/outflow distribution."""
+    return route_to_vendor(
+        "get_futu_capital_distribution", symbol, trade_date or get_current_date()
+    )
+
+
+@tool
+def get_futu_market_snapshot(
+    symbol: Annotated[str, InjectedState("company_of_interest")],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """Optional Futu US/HK core snapshot with valuation and 52-week position."""
+    return route_to_vendor("get_futu_market_snapshot", symbol, trade_date or get_current_date())
+
+
+@tool
+def get_futu_history_kline(
+    symbol: Annotated[str, InjectedState("company_of_interest")],
+    look_back_days: Annotated[int, "calendar-day lookback for Futu daily price/volume trend"] = 120,
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """Optional Futu forward-adjusted daily K-line trend; supplements primary OHLCV."""
+    try:
+        start_date, end_date = _futu_window(trade_date, look_back_days)
+    except ValueError as exc:
+        return str(exc)
+    return route_to_vendor("get_futu_history_kline", symbol, start_date, end_date)
 
 
 @tool

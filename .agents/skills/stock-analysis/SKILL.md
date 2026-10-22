@@ -100,10 +100,19 @@ curl --noproxy '*' --silent --show-error --max-time 1800 \
 
 ## 结果分析
 
-API 调用完成后，回复必须包含以下两点：
+API 调用成功后，先读取完整报告；如果响应提供 `data_manifest`，还必须读取该文件，并检查其中引用的关键原始文件和标准化文件是否存在。`complete_report` 是模型分析结果，`data/raw`、`data/normalized` 和 `data_manifest` 是程序直接保存的数据证据，两者不得混为一谈。
 
-1. 报告路径：准确提取 API 响应中的 `report_dir`，并注明完整报告文件为 `complete_report.md`，HTML 报告为 `complete_report.html`（如果响应中提供了该路径）。
-2. 投资建议：结合报告内容给出直接但有条件的判断，例如买入、分批买入、持有、等待观察或回避；说明判断依据、主要风险和触发条件，不承诺收益。
+回复必须包含以下内容：
+
+1. **报告路径**：准确提取 `report_dir`、`complete_report` 和可用的 `complete_report_html`。
+2. **数据产物路径**：列出可用的 `data_manifest`、`raw_data_dir` 和 `normalized_data_dir`。不要把大量原始行情直接粘贴到回复中；用户明确要求查看时，再读取对应文件或摘录相关字段。
+3. **数据源审计**：根据 manifest 说明实际调用了哪些来源和接口、成功或失败状态、是否发生回退，以及关键数据的 `data_as_of`、币种和市场。失败来源不能因为后续回退成功而被隐藏。
+4. **证据核对**：对支撑结论的关键数据（例如价格、成交量、估值、资金流和财报指标）优先与原始或标准化文件交叉核对。若报告遗漏了已返回的重要字段，或多个来源存在冲突，应明确指出报告采用了哪个值及原因；不得擅自平均、拼接或消除差异。
+5. **投资建议**：结合报告及核对后的数据，给出直接但有条件的判断，例如买入、分批买入、持有、等待观察或回避；说明判断依据、主要风险和触发条件，不承诺收益。
+
+原始数据并不自动等于可直接比较的数据。引用前检查时间、时区、币种、复权方式、盘中/收盘状态和字段语义。富途按订单规模推断的资金流不能表述为某家机构的已确认交易。
+
+默认请求应返回数据产物。如果响应没有 `data_manifest` 或对应文件不存在，报告仍可按成功响应处理，但必须明确说明“原始数据产物不可用”，不得用 `message_tool.log` 或模型报告冒充原始数据。如果用户本次明确要求原始数据，则将其标记为未完成的交付项。
 
 API 响应通常包含股票代码、分析日期、分析师列表和报告路径，例如：
 
@@ -112,11 +121,14 @@ API 响应通常包含股票代码、分析日期、分析师列表和报告路�
   "success": true,
   "report_dir": "/path/to/reports/TSLA_20261018_183038",
   "complete_report": "/path/to/reports/TSLA_20261018_183038/complete_report.md",
-  "complete_report_html": "/path/to/reports/TSLA_20261018_183038/complete_report.html"
+  "complete_report_html": "/path/to/reports/TSLA_20261018_183038/complete_report.html",
+  "data_manifest": "/path/to/reports/TSLA_20261018_183038/data/manifest.json",
+  "raw_data_dir": "/path/to/reports/TSLA_20261018_183038/data/raw",
+  "normalized_data_dir": "/path/to/reports/TSLA_20261018_183038/data/normalized"
 }
 ```
 
-投资建议应区分已核实事实与推断；如需引用现价、日期或重大事实，应标明时间和来源。应优先给出带时间戳的价格，再简述业务与财务、估值、催化剂/风险及适合用户偏好的分批或等待条件。
+投资建议应区分原始事实、标准化/计算结果和模型推断；如需引用现价、日期或重大事实，应标明时间和来源。应优先给出带时间戳的价格，再简述业务与财务、估值、催化剂/风险及适合用户偏好的分批或等待条件。
 
 ### 异常处理
 

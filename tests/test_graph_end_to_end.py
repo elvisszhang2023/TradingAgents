@@ -174,10 +174,12 @@ def test_a_full_run_reaches_a_logged_decision(tmp_path, monkeypatch, offline, st
     for key in ("market_report", "sentiment_report", "news_report", "fundamentals_report",
                 "investment_plan", "trader_investment_plan", "final_trade_decision"):
         assert state[key].strip(), key
-    tool_methods = {"get_stock_data", "get_indicators", "get_news", "get_global_news",
-                    "get_macro_indicators", "get_prediction_markets", "get_fundamentals",
-                    "get_balance_sheet", "get_cashflow", "get_income_statement",
-                    "get_insider_transactions", "ohlcv"}
+        tool_methods = {"get_stock_data", "get_indicators", "get_news", "get_global_news",
+                        "get_macro_indicators", "get_prediction_markets", "get_fundamentals",
+                        "get_balance_sheet", "get_cashflow", "get_income_statement",
+                        "get_insider_transactions", "get_futu_capital_flow",
+                        "get_futu_capital_distribution", "get_futu_market_snapshot",
+                        "get_futu_history_kline", "ohlcv"}
     assert offline == tool_methods
     assert [e["rating"] for e in graph.memory_log.load_entries()] == ["Overweight"]
 

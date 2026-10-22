@@ -25,6 +25,11 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
     "TRADINGAGENTS_LLM_MAX_RETRIES":      "llm_max_retries",
     "TRADINGAGENTS_MAX_TOKENS":           "max_tokens",
+    "FUTU_ENABLED":                       "futu_enabled",
+    "FUTU_OPEND_HOST":                    "futu_opend_host",
+    "FUTU_OPEND_PORT":                    "futu_opend_port",
+    "FUTU_CONNECT_TIMEOUT_SECONDS":       "futu_connect_timeout_seconds",
+    "TRADINGAGENTS_INCLUDE_RAW_DATA":     "include_raw_data",
     # Provider-specific reasoning/thinking knobs (None = each provider's own
     # default). Settable here for non-interactive runs; the CLI also offers an
     # interactive choice, which is skipped when the matching var is set.
@@ -135,6 +140,16 @@ def build_default_config() -> dict:
         "max_recur_limit": 100,
         # Rounds of tool calls an analyst may make before it is asked for its report.
         "max_tool_rounds": 20,
+        # Optional Futu OpenD enrichment. It supplements (never replaces) the
+        # configured price/fundamental/news vendors and is safe to leave off.
+        "futu_enabled": True,
+        "futu_opend_host": "127.0.0.1",
+        "futu_opend_port": 11111,
+        "futu_connect_timeout_seconds": 10,
+        # Persist every routed vendor response and fallback error beside the
+        # generated report. This is model-independent and enabled by default
+        # so an HTTP result is auditable without relying on LLM prose.
+        "include_raw_data": True,
         # News / data fetching parameters
         # Increase for longer lookback strategies or to broaden macro coverage;
         # decrease to reduce token usage in agent prompts.
@@ -165,6 +180,7 @@ def build_default_config() -> dict:
             "news_data": "fmp,alpha_vantage,finnhub,yfinance",
             "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
             "prediction_markets": "polymarket",  # Options: polymarket (keyless)
+            "capital_flow_data": "futu",         # Optional: local Futu OpenD
         },
         # Tool-level configuration (takes precedence over category-level)
         "tool_vendors": {

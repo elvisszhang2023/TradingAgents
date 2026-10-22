@@ -283,7 +283,11 @@ class TradingAgentsGraph:
         """
         if save_path is None:
             save_path = self.default_report_path(ticker)
-        return write_report_tree(final_state, ticker, save_path, settings=self.run_settings(), html=html)
+        report = write_report_tree(final_state, ticker, save_path, settings=self.run_settings(), html=html)
+        collector = getattr(self, "config", {}).get("_data_artifact_collector")
+        if collector is not None:
+            collector.write(save_path)
+        return report
 
     def default_report_path(self, ticker) -> Path:
         """Where a run's reports go unless told otherwise: under results_dir, stamped now."""
